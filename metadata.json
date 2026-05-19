@@ -1,0 +1,6 @@
+{
+  "name": "Isometric Stack 3D",
+  "description": "A precision timing game where you stack blocks as high as possible in a beautiful isometric world. Match the alignment perfectly to maintain your stack size!",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
