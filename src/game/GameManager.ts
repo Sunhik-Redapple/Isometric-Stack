@@ -5,10 +5,12 @@ export type GameState = 'START' | 'PLAYING' | 'GAMEOVER';
 
 interface Block {
   mesh: THREE.Mesh;
+  material: THREE.Material;
   width: number;
   depth: number;
   x: number;
   z: number;
+  windowMaterials: THREE.MeshStandardMaterial[];
 }
 
 interface FlyingPerson {
@@ -39,12 +41,17 @@ export class GameManager {
   }[] = [];
   private flyingPeople: FlyingPerson[] = [];
   private rainSystem: THREE.Points | null = null;
+  private windStreaks: THREE.LineSegments | null = null;
+  private leaves: THREE.Group | null = null;
   private weatherTransition: number = 0;
+  private windIntensity: number = 0;
+  private windDirection = new THREE.Vector3(1, 0, 0.3).normalize();
   private lightningIntensity: number = 0;
   private ambientLight: THREE.AmbientLight | null = null;
   private directionalLight: THREE.DirectionalLight | null = null;
   private initialSkyColor = new THREE.Color('#f0f2f5');
-  private cloudySkyColor = new THREE.Color('#1e293b'); // Slate-800 for a darker storm look
+  private cloudySkyColor = new THREE.Color('#020617'); // Deep night sky
+  private litWindowColor = new THREE.Color('#fcd34d'); // Amber-300
   private lightningColor = new THREE.Color('#ffffff'); // Pure white for peak flash
   private lightningSubFlash: boolean = false;
   private currentWire: THREE.Mesh | null = null;
@@ -98,6 +105,7 @@ export class GameManager {
     this.initShadow();
     this.initBase();
     this.initRain();
+    this.initWind();
     this.handleResize(); // Initialize with proper responsive bounds
     this.animate();
 
@@ -142,7 +150,7 @@ export class GameManager {
 
     // Add windows like in the image
     const windowColor = '#1f2937'; // Dark windows
-    const windowMaterial = new THREE.MeshStandardMaterial({ color: windowColor });
+    const windowMaterials: THREE.MeshStandardMaterial[] = [];
     const windowWidth = width * 0.15;
     const windowHeight = height * 0.35;
     const windowDepth = 0.05;
@@ -161,6 +169,14 @@ export class GameManager {
           windowHeight,
           isXSide ? windowWidth : windowDepth
         );
+        // Individual material for each window so we can update emissions
+        const windowMaterial = new THREE.MeshStandardMaterial({ 
+          color: windowColor,
+          emissive: new THREE.Color('#000000'),
+          emissiveIntensity: 0
+        });
+        windowMaterials.push(windowMaterial);
+        
         const win = new THREE.Mesh(winGeom, windowMaterial);
         
         const spacing = sideWidth * 0.2;
@@ -195,7 +211,7 @@ export class GameManager {
     );
     group.add(line);
 
-    return { group, mesh, line, geometry, material };
+    return { group, mesh, line, geometry, material, windowMaterials };
   }
 
   private initBase() {
@@ -222,10 +238,12 @@ export class GameManager {
 
     this.stack.push({
       mesh: foundation as any,
+      material: foundationMat,
       width: platformSize,
       depth: platformSize,
       x: 0,
-      z: 0
+      z: 0,
+      windowMaterials: []
     });
   }
 
@@ -259,6 +277,11 @@ export class GameManager {
     this.flyingPeople.forEach(p => this.scene.remove(p.group));
     this.flyingPeople = [];
 
+    if (this.leaves) {
+      this.leaves.children.forEach(leaf => (leaf as any).visible = false);
+    }
+    if (this.windStreaks) this.windStreaks.visible = false;
+
     // Explicitly remove current block if it exists
     if (this.currentBlock) {
       this.scene.remove(this.currentBlock.mesh);
@@ -275,8 +298,10 @@ export class GameManager {
     this.moveOffset = 0;
     this.isDropping = false;
     this.weatherTransition = 0;
+    this.windIntensity = 0;
     this.scene.background = this.initialSkyColor.clone();
     if (this.rainSystem) this.rainSystem.visible = false;
+    if (this.windStreaks) this.windStreaks.visible = false;
     
     if (this.onScoreUpdate) this.onScoreUpdate(0);
 
@@ -295,7 +320,7 @@ export class GameManager {
     this.direction = this.direction === 'x' ? 'z' : 'x';
     this.isDropping = false;
 
-    const { group } = this.createBlockMesh(INITIAL_BLOCK_SIZE, BLOCK_HEIGHT, INITIAL_BLOCK_SIZE, COLORS[this.colorIndex]);
+    const { group, windowMaterials } = this.createBlockMesh(INITIAL_BLOCK_SIZE, BLOCK_HEIGHT, INITIAL_BLOCK_SIZE, COLORS[this.colorIndex]);
 
     // Hang block higher up
     // The first building block sits on top of platform at foundationTop
@@ -317,10 +342,12 @@ export class GameManager {
     this.scene.add(group);
     this.currentBlock = {
       mesh: group as any,
+      material: (group.children.find(c => c instanceof THREE.Mesh) as THREE.Mesh).material as THREE.Material,
       width: INITIAL_BLOCK_SIZE,
       depth: INITIAL_BLOCK_SIZE,
       x: group.position.x,
-      z: group.position.z
+      z: group.position.z,
+      windowMaterials
     };
 
     // Show and position shadow guide
@@ -419,10 +446,12 @@ export class GameManager {
 
     this.stack.push({
       mesh: this.currentBlock.mesh,
+      material: this.currentBlock.material,
       width: size,
       depth: size,
       x: newX,
-      z: newZ
+      z: newZ,
+      windowMaterials: this.currentBlock.windowMaterials
     });
 
     this.score++;
@@ -544,7 +573,7 @@ export class GameManager {
 
     const material = new THREE.PointsMaterial({
       color: '#cbd5e1',
-      size: 0.45,
+      size: 3,
       transparent: true,
       opacity: 0.85
     });
@@ -583,11 +612,152 @@ export class GameManager {
     (this.rainSystem.material as THREE.PointsMaterial).opacity = 0.85 * this.weatherTransition;
   }
 
+  private initWind() {
+    // 1. Wind Streaks
+    const streakCount = 40;
+    const streakGeometry = new THREE.BufferGeometry();
+    const streakPositions = new Float32Array(streakCount * 2 * 3); // 2 points per line
+    
+    for (let i = 0; i < streakCount; i++) {
+      const x = (Math.random() - 0.5) * 100;
+      const y = Math.random() * 80;
+      const z = (Math.random() - 0.5) * 100;
+      
+      const idx = i * 6;
+      streakPositions[idx] = x;
+      streakPositions[idx + 1] = y;
+      streakPositions[idx + 2] = z;
+      
+      // End point
+      const length = 5 + Math.random() * 5;
+      streakPositions[idx + 3] = x + this.windDirection.x * length;
+      streakPositions[idx + 4] = y;
+      streakPositions[idx + 5] = z + this.windDirection.z * length;
+    }
+    
+    streakGeometry.setAttribute('position', new THREE.BufferAttribute(streakPositions, 3));
+    const streakMaterial = new THREE.LineBasicMaterial({
+      color: '#cbd5e1',
+      transparent: true,
+      opacity: 0, // start invisible
+      linewidth: 1
+    });
+    
+    this.windStreaks = new THREE.LineSegments(streakGeometry, streakMaterial);
+    this.scene.add(this.windStreaks);
+
+    // 2. Flying Leaves
+    this.leaves = new THREE.Group();
+    const leafColors = ['#166534', '#15803d', '#713f12', '#a16207'];
+    const leafCount = 30;
+    
+    for (let i = 0; i < leafCount; i++) {
+      const geometry = new THREE.PlaneGeometry(0.4, 0.6);
+      const material = new THREE.MeshStandardMaterial({
+        color: leafColors[Math.floor(Math.random() * leafColors.length)],
+        side: THREE.DoubleSide
+      });
+      const leaf = new THREE.Mesh(geometry, material);
+      
+      // Custom properties for animation
+      (leaf as any).speed = 0.5 + Math.random() * 0.5;
+      (leaf as any).rotSpeed = (Math.random() - 0.5) * 0.2;
+      (leaf as any).offset = Math.random() * 100;
+      
+      leaf.position.set(
+        (Math.random() - 0.5) * 100,
+        Math.random() * 80,
+        (Math.random() - 0.5) * 100
+      );
+      leaf.visible = false;
+      this.leaves.add(leaf);
+    }
+    this.scene.add(this.leaves);
+  }
+
+  private updateWind() {
+    if (!this.windStreaks || !this.leaves || this.windIntensity < 0.01) return;
+
+    const camY = this.camera.position.y;
+    const time = Date.now() * 0.001;
+    
+    // Update Wind Streaks
+    const streakPos = this.windStreaks.geometry.attributes.position.array as Float32Array;
+    const streakCount = streakPos.length / 6;
+    const windSpeed = 1.5 + this.windIntensity * 2.0;
+
+    for (let i = 0; i < streakCount; i++) {
+      const idx = i * 6;
+      // Move points along wind direction
+      streakPos[idx] += windSpeed * this.windDirection.x;
+      streakPos[idx + 2] += windSpeed * this.windDirection.z;
+      streakPos[idx + 3] += windSpeed * this.windDirection.x;
+      streakPos[idx + 5] += windSpeed * this.windDirection.z;
+
+      // Reset streaks
+      const centerX = streakPos[idx];
+      const centerZ = streakPos[idx + 2];
+      const distFromCam = Math.sqrt(Math.pow(centerX - this.camera.position.x, 2) + Math.pow(centerZ - this.camera.position.z, 2));
+      
+      if (distFromCam > 60 || Math.abs(streakPos[idx + 1] - camY) > 40) {
+        // Respawn "upwind"
+        const dist = 50 + Math.random() * 10;
+        const x = this.camera.position.x - this.windDirection.x * dist + (Math.random() - 0.5) * 60;
+        const z = this.camera.position.z - this.windDirection.z * dist + (Math.random() - 0.5) * 60;
+        const y = camY + (Math.random() - 0.5) * 40;
+        
+        streakPos[idx] = x;
+        streakPos[idx + 1] = y;
+        streakPos[idx + 2] = z;
+        
+        const length = 5 + Math.random() * 5;
+        streakPos[idx + 3] = x + this.windDirection.x * length;
+        streakPos[idx + 4] = y;
+        streakPos[idx + 5] = z + this.windDirection.z * length;
+      }
+    }
+    this.windStreaks.geometry.attributes.position.needsUpdate = true;
+    (this.windStreaks.material as THREE.LineBasicMaterial).opacity = this.windIntensity * 0.3 * (0.5 + Math.sin(time * 2) * 0.5);
+    this.windStreaks.visible = true;
+
+    // Update Leaves
+    this.leaves.children.forEach((leaf: any) => {
+      leaf.visible = true;
+      leaf.position.x += windSpeed * leaf.speed * this.windDirection.x;
+      leaf.position.z += windSpeed * leaf.speed * this.windDirection.z;
+      leaf.position.y += Math.sin(time + leaf.offset) * 0.05; // Fluttering
+      
+      leaf.rotation.x += leaf.rotSpeed;
+      leaf.rotation.y += leaf.rotSpeed;
+      
+      const distFromCam = Math.sqrt(Math.pow(leaf.position.x - this.camera.position.x, 2) + Math.pow(leaf.position.z - this.camera.position.z, 2));
+      if (distFromCam > 60 || Math.abs(leaf.position.y - camY) > 40) {
+         // Respawn upwind
+         const dist = 50 + Math.random() * 10;
+         leaf.position.x = this.camera.position.x - this.windDirection.x * dist + (Math.random() - 0.5) * 60;
+         leaf.position.z = this.camera.position.z - this.windDirection.z * dist + (Math.random() - 0.5) * 60;
+         leaf.position.y = camY + (Math.random() - 0.5) * 40;
+      }
+    });
+
+    (this.leaves as any).children.forEach((l: any) => {
+      l.material.opacity = this.windIntensity;
+      l.material.transparent = true;
+    });
+  }
+
   private animate = () => {
     requestAnimationFrame(this.animate);
 
     // Global sway clock - speed up by 20% during weather transition
-    this.moveOffset += this.speed * (1 + this.weatherTransition * 0.2);
+    // and apply wind resistance (slow down when moving against wind)
+    const windComponent = this.direction === 'x' ? this.windDirection.x : this.windDirection.z;
+    const moveCos = Math.cos(this.moveOffset);
+    const isMovingAgainstWind = (moveCos * windComponent) < 0;
+    const resistanceFactor = isMovingAgainstWind ? 0.75 : 1.0; // 25% slower when pushing against wind
+    const windResistance = 1 + this.windIntensity * (resistanceFactor - 1);
+    
+    this.moveOffset += this.speed * (1 + this.weatherTransition * 0.2) * windResistance;
 
     // Calculate tower sway if height > 15
     let baseSway = 0;
@@ -605,23 +775,38 @@ export class GameManager {
       const swayFactor = Math.max(0, i - 15) * 0.15;
       const currentDisplacement = baseSway * swayFactor;
 
+      // Add directional "lean" from wind
+      const windLean = this.windIntensity * Math.min(i, 20) * 0.05;
+
       if (this.direction === 'x') {
-        block.mesh.position.x = block.x + currentDisplacement;
-        block.mesh.position.z = block.z; // Lock other axis
+        block.mesh.position.x = block.x + currentDisplacement + windLean * this.windDirection.x;
+        block.mesh.position.z = block.z + windLean * this.windDirection.z; 
       } else {
-        block.mesh.position.z = block.z + currentDisplacement;
-        block.mesh.position.x = block.x;
+        block.mesh.position.z = block.z + currentDisplacement + windLean * this.windDirection.z;
+        block.mesh.position.x = block.x + windLean * this.windDirection.x;
       }
     });
 
     // Handle weather transitions
-    const isRainyPhase = this.score >= 15 && this.score < 40;
-    const targetTransition = isRainyPhase ? 1 : 0;
+    const isWindyPhase = this.score >= 45 && this.score < 75;
+    const isRainyPhase = this.score >= 10 && this.score < 35;
 
+    // Wind transition logic
+    const targetWindIntensity = isWindyPhase ? 1.0 : 0;
+    if (Math.abs(this.windIntensity - targetWindIntensity) > 0.001) {
+      this.windIntensity += (targetWindIntensity - this.windIntensity) * 0.005;
+    }
+
+    // Rain/Sky transition logic
+    const targetTransition = isRainyPhase ? 1 : 0;
     if (Math.abs(this.weatherTransition - targetTransition) > 0.001) {
       this.weatherTransition += (targetTransition - this.weatherTransition) * 0.005;
       
-      if (this.onWeatherUpdate) this.onWeatherUpdate(this.weatherTransition);
+      if (this.onWeatherUpdate) {
+        // Combine transitions: wind starts UI color change logic earlier if needed
+        // but traditionally we only darken for rain.
+        this.onWeatherUpdate(this.weatherTransition);
+      }
       
       const skyBase = this.initialSkyColor.clone().lerp(this.cloudySkyColor, this.weatherTransition);
       this.scene.background = skyBase;
@@ -629,6 +814,39 @@ export class GameManager {
       if (this.rainSystem) {
         this.rainSystem.visible = this.weatherTransition > 0.01;
       }
+    }
+
+    if (this.windIntensity > 0.01) {
+      this.updateWind();
+    }
+
+    // Update window emissions based on weather transition
+    const emissiveIntensity = this.weatherTransition * 1.5; 
+    const currentEmissive = new THREE.Color(0x000000).lerp(this.litWindowColor, this.weatherTransition);
+    
+    // Also slightly boost the actual block visibility by adding subtle emission of its own color
+    // This prevents blocks from looking like silhouettes against the dark sky
+    this.stack.forEach(block => {
+      block.windowMaterials.forEach(mat => {
+        mat.emissive.copy(currentEmissive);
+        mat.emissiveIntensity = emissiveIntensity;
+      });
+
+      // Subtle vibrancy boost for the block body
+      const blockMat = block.material as THREE.MeshStandardMaterial;
+      const vibrancy = this.weatherTransition * 0.2;
+      blockMat.emissive.copy(blockMat.color).multiplyScalar(vibrancy);
+    });
+    
+    if (this.currentBlock) {
+      this.currentBlock.windowMaterials.forEach(mat => {
+        mat.emissive.copy(currentEmissive);
+        mat.emissiveIntensity = emissiveIntensity;
+      });
+
+      const blockMat = this.currentBlock.material as THREE.MeshStandardMaterial;
+      const vibrancy = this.weatherTransition * 0.2;
+      blockMat.emissive.copy(blockMat.color).multiplyScalar(vibrancy);
     }
 
     // Lightning effect
@@ -679,8 +897,13 @@ export class GameManager {
         : lastBlock.mesh.position.y + BLOCK_HEIGHT;
 
       if (!this.isDropping) {
-        // Swing logic
-        const swingOffset = Math.sin(this.moveOffset) * 9;
+        // Swing logic with wind impact
+        const windComponent = this.direction === 'x' ? this.windDirection.x : this.windDirection.z;
+        const windBias = windComponent * this.windIntensity * 3;
+        // Surge effect: increase displacement when swinging in the direction of the wind
+        const windSurge = Math.max(0, Math.sin(this.moveOffset) * windComponent) * this.windIntensity * 5;
+        
+        const swingOffset = Math.sin(this.moveOffset) * 9 + windBias + windSurge;
         
         // Position relative to current swayed top of tower
         if (this.direction === 'x') {
