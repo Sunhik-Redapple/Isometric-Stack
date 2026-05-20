@@ -11,6 +11,7 @@ interface Block {
   x: number;
   z: number;
   windowMaterials: THREE.MeshStandardMaterial[];
+  isExecFloor?: boolean;
 }
 
 interface FlyingPerson {
@@ -368,11 +369,14 @@ export class GameManager {
   private swingMoveOffset: number = 0;
   private colorIndex: number = 0;
 
-  private onScoreUpdate?: (score: number) => void;
+  private onScoreUpdate?: (score: number, populationIncrement?: number) => void;
   private onGameOver?: (score: number) => void;
   private onPerfect?: () => void;
   private onWeatherUpdate?: (transition: number) => void;
   private onSlip?: () => void;
+  private onStreakUpdate?: (streak: number) => void;
+  private onExecPhaseStateChange?: (active: boolean, durationMs: number) => void;
+  private onExecTimerTick?: (remainingMs: number) => void;
 
   private isSlipping: boolean = false;
   private slipProgress: number = 0;
@@ -382,13 +386,21 @@ export class GameManager {
   private slipTargetZ: number = 0;
   private splashParticles: { mesh: THREE.Mesh; vx: number; vy: number; vz: number; life: number }[] = [];
 
+  private perfectStreak: number = 0;
+  private isExecPhaseActive: boolean = false;
+  private execPhaseRemainingMs: number = 0;
+  private lastTime: number = performance.now();
+
   constructor(
     container: HTMLElement, 
-    onScoreUpdate?: (score: number) => void, 
+    onScoreUpdate?: (score: number, populationIncrement?: number) => void, 
     onGameOver?: (score: number) => void,
     onPerfect?: () => void,
     onWeatherUpdate?: (transition: number) => void,
-    onSlip?: () => void
+    onSlip?: () => void,
+    onStreakUpdate?: (streak: number) => void,
+    onExecPhaseStateChange?: (active: boolean, durationMs: number) => void,
+    onExecTimerTick?: (remainingMs: number) => void
   ) {
     this.container = container;
     this.onScoreUpdate = onScoreUpdate;
@@ -396,6 +408,9 @@ export class GameManager {
     this.onPerfect = onPerfect;
     this.onWeatherUpdate = onWeatherUpdate;
     this.onSlip = onSlip;
+    this.onStreakUpdate = onStreakUpdate;
+    this.onExecPhaseStateChange = onExecPhaseStateChange;
+    this.onExecTimerTick = onExecTimerTick;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#f0f2f5');
@@ -445,37 +460,41 @@ export class GameManager {
     this.scene.add(this.shadowMesh);
   }
 
-  private createBlockMesh(width: number, height: number, depth: number, color: string) {
+  private createBlockMesh(width: number, height: number, depth: number, color: string, isExecFloor: boolean = false) {
     const group = new THREE.Group();
     
     // Main block
     const geometry = new THREE.BoxGeometry(width, height, depth);
 
     // Create unique procedural textures for each face orientation to prevent stretching
-    const texRight = generateProceduralTexture(color);
+    const texColor = isExecFloor ? '#eab308' : color;
+    const texRight = generateProceduralTexture(texColor);
     texRight.repeat.set(depth / 3.0, height / 3.0);
 
     const texLeft = texRight.clone();
     texLeft.repeat.set(depth / 3.0, height / 3.0);
 
-    const texTop = generateProceduralTexture(color);
+    const texTop = generateProceduralTexture(texColor);
     texTop.repeat.set(width / 3.0, depth / 3.0);
 
     const texBottom = texTop.clone();
     texBottom.repeat.set(width / 3.0, depth / 3.0);
 
-    const texFront = generateProceduralTexture(color);
+    const texFront = generateProceduralTexture(texColor);
     texFront.repeat.set(width / 3.0, height / 3.0);
 
     const texBack = texFront.clone();
     texBack.repeat.set(width / 3.0, height / 3.0);
 
-    const matRight = new THREE.MeshStandardMaterial({ color, map: texRight, roughness: 0.45, metalness: 0.1 });
-    const matLeft = new THREE.MeshStandardMaterial({ color, map: texLeft, roughness: 0.45, metalness: 0.1 });
-    const matTop = new THREE.MeshStandardMaterial({ color, map: texTop, roughness: 0.5, metalness: 0.05 });
-    const matBottom = new THREE.MeshStandardMaterial({ color, map: texBottom, roughness: 0.5, metalness: 0.05 });
-    const matFront = new THREE.MeshStandardMaterial({ color, map: texFront, roughness: 0.45, metalness: 0.1 });
-    const matBack = new THREE.MeshStandardMaterial({ color, map: texBack, roughness: 0.45, metalness: 0.1 });
+    const roughness = isExecFloor ? 0.2 : 0.45;
+    const metalness = isExecFloor ? 0.75 : 0.1;
+
+    const matRight = new THREE.MeshStandardMaterial({ color: texColor, map: texRight, roughness, metalness });
+    const matLeft = new THREE.MeshStandardMaterial({ color: texColor, map: texLeft, roughness, metalness });
+    const matTop = new THREE.MeshStandardMaterial({ color: texColor, map: texTop, roughness: isExecFloor ? 0.25 : 0.5, metalness: isExecFloor ? 0.7 : 0.05 });
+    const matBottom = new THREE.MeshStandardMaterial({ color: texColor, map: texBottom, roughness: isExecFloor ? 0.25 : 0.5, metalness: isExecFloor ? 0.7 : 0.05 });
+    const matFront = new THREE.MeshStandardMaterial({ color: texColor, map: texFront, roughness, metalness });
+    const matBack = new THREE.MeshStandardMaterial({ color: texColor, map: texBack, roughness, metalness });
 
     const materialArray = [matRight, matLeft, matTop, matBottom, matFront, matBack];
 
@@ -506,8 +525,8 @@ export class GameManager {
         // Individual material for each window so we can update emissions
         const windowMaterial = new THREE.MeshStandardMaterial({ 
           color: windowColor,
-          emissive: new THREE.Color('#000000'),
-          emissiveIntensity: 0
+          emissive: new THREE.Color(isExecFloor ? '#fbbf24' : '#000000'),
+          emissiveIntensity: isExecFloor ? 2.0 : 0
         });
         windowMaterials.push(windowMaterial);
         
@@ -633,6 +652,12 @@ export class GameManager {
       this.currentBlock = null;
     }
 
+    this.perfectStreak = 0;
+    this.isExecPhaseActive = false;
+    this.execPhaseRemainingMs = 0;
+    if (this.onStreakUpdate) this.onStreakUpdate(0);
+    if (this.onExecPhaseStateChange) this.onExecPhaseStateChange(false, 0);
+
     // Reset current state
     this.stack = [];
     this.fallingBlocks = [];
@@ -669,7 +694,15 @@ export class GameManager {
     this.direction = this.direction === 'x' ? 'z' : 'x';
     this.isDropping = false;
 
-    const { group, windowMaterials } = this.createBlockMesh(INITIAL_BLOCK_SIZE, BLOCK_HEIGHT, INITIAL_BLOCK_SIZE, COLORS[this.colorIndex]);
+    const isExecFloor = this.isExecPhaseActive;
+
+    const { group, windowMaterials } = this.createBlockMesh(
+      INITIAL_BLOCK_SIZE, 
+      BLOCK_HEIGHT, 
+      INITIAL_BLOCK_SIZE, 
+      COLORS[this.colorIndex],
+      isExecFloor
+    );
 
     // Hang block higher up
     // The first building block sits on top of platform at foundationTop
@@ -696,7 +729,8 @@ export class GameManager {
       depth: INITIAL_BLOCK_SIZE,
       x: group.position.x,
       z: group.position.z,
-      windowMaterials
+      windowMaterials,
+      isExecFloor
     };
 
     // Show and position shadow guide
@@ -771,11 +805,37 @@ export class GameManager {
       return;
     }
 
+    const isExecFloor = this.currentBlock.isExecFloor || false;
+
     if (isPerfect) {
       if (this.onPerfect) this.onPerfect();
       // Snap to perfect position
       this.currentBlock.mesh.position.x = lastBlock.mesh.position.x;
       this.currentBlock.mesh.position.z = lastBlock.mesh.position.z;
+
+      // Handle perfect placement streak metrics
+      if (!this.isExecPhaseActive) {
+        this.perfectStreak++;
+        if (this.perfectStreak >= 5) {
+          this.isExecPhaseActive = true;
+          this.execPhaseRemainingMs = 10000;
+          this.perfectStreak = 0;
+          if (this.onExecPhaseStateChange) {
+            this.onExecPhaseStateChange(true, 10000);
+          }
+        }
+        if (this.onStreakUpdate) {
+          this.onStreakUpdate(this.perfectStreak);
+        }
+      }
+    } else {
+      // Imperfect placement resets perfect streak
+      if (!this.isExecPhaseActive) {
+        this.perfectStreak = 0;
+        if (this.onStreakUpdate) {
+          this.onStreakUpdate(this.perfectStreak);
+        }
+      }
     }
 
     // Calculate un-swayed base coordinates for the block
@@ -800,12 +860,19 @@ export class GameManager {
       depth: size,
       x: newX,
       z: newZ,
-      windowMaterials: this.currentBlock.windowMaterials
+      windowMaterials: this.currentBlock.windowMaterials,
+      isExecFloor
     });
+
+    let populationIncrement = 144;
+    if (isExecFloor) {
+      populationIncrement = isPerfect ? 10 : 7;
+      this.spawnExecutiveSparkles(this.currentBlock.mesh.position, isPerfect);
+    }
 
     this.score++;
     this.shakeIntensity = isPerfect ? 0.26 : 0.187; // Increased intensity by 30%
-    if (this.onScoreUpdate) this.onScoreUpdate(this.score);
+    if (this.onScoreUpdate) this.onScoreUpdate(this.score, populationIncrement);
     this.speed += SPEED_INCREMENT;
     
     // Spawn people flying with umbrellas
@@ -1097,6 +1164,26 @@ export class GameManager {
 
   private animate = () => {
     requestAnimationFrame(this.animate);
+
+    const now = performance.now();
+    const dt = now - this.lastTime;
+    this.lastTime = now;
+
+    // Tick down Executive Floors cooldown timer smoothly
+    if (this.gameState === 'PLAYING' && this.isExecPhaseActive) {
+      this.execPhaseRemainingMs -= dt;
+      if (this.execPhaseRemainingMs <= 0) {
+        this.execPhaseRemainingMs = 0;
+        this.isExecPhaseActive = false;
+        if (this.onExecPhaseStateChange) {
+          this.onExecPhaseStateChange(false, 0);
+        }
+      } else {
+        if (this.onExecTimerTick) {
+          this.onExecTimerTick(this.execPhaseRemainingMs);
+        }
+      }
+    }
 
     // Global sway clock (for tower/block sway) - speed up by 20% during weather transition
     // and apply wind resistance (slow down when moving against wind)
@@ -1592,6 +1679,39 @@ export class GameManager {
       const vz = Math.sin(angle) * speed + slipZ * 0.15;
       const vy = 0.08 + Math.random() * 0.15;
       
+      this.scene.add(mesh);
+      this.splashParticles.push({
+        mesh,
+        vx,
+        vy,
+        vz,
+        life: 1.0
+      });
+    }
+  }
+
+  private spawnExecutiveSparkles(pos: THREE.Vector3, isPerfect: boolean) {
+    const particleCount = isPerfect ? 25 : 12;
+    const geom = new THREE.SphereGeometry(isPerfect ? 0.18 : 0.12, 4, 4);
+    const mat = new THREE.MeshBasicMaterial({
+      color: '#fbbf24', // Yellow/Gold
+      transparent: true,
+      opacity: 0.9
+    });
+
+    for (let i = 0; i < particleCount; i++) {
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.copy(pos);
+      mesh.position.x += (Math.random() - 0.5) * INITIAL_BLOCK_SIZE;
+      mesh.position.z += (Math.random() - 0.5) * INITIAL_BLOCK_SIZE;
+      mesh.position.y += (Math.random() - 0.5) * BLOCK_HEIGHT;
+
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.08 + Math.random() * 0.12;
+      const vx = Math.cos(angle) * speed;
+      const vz = Math.sin(angle) * speed;
+      const vy = 0.15 + Math.random() * 0.2; // Upward burst
+
       this.scene.add(mesh);
       this.splashParticles.push({
         mesh,

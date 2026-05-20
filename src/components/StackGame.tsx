@@ -13,6 +13,9 @@ export const StackGame: React.FC = () => {
   const [gameState, setGameState] = useState<'START' | 'PLAYING' | 'GAMEOVER'>('START');
   const [showPerfect, setShowPerfect] = useState(false);
   const [showSlip, setShowSlip] = useState(false);
+  const [perfectStreak, setPerfectStreak] = useState(0);
+  const [isExecActive, setIsExecActive] = useState(false);
+  const [execTimeLeft, setExecTimeLeft] = useState(0);
   const [highScore, setHighScore] = useState(() => {
     const saved = localStorage.getItem('stack-high-score');
     return saved ? parseInt(saved, 10) : 0;
@@ -22,9 +25,15 @@ export const StackGame: React.FC = () => {
     if (containerRef.current) {
       const manager = new GameManager(
         containerRef.current,
-        (s) => {
+        (s, popInc) => {
           setScore(s);
-          setPopulation(s * 144); // ~144 people per floor
+          if (s === 0) {
+            setPopulation(0);
+          } else if (popInc !== undefined) {
+            setPopulation((prev) => prev + popInc);
+          } else {
+            setPopulation(s * 144);
+          }
         },
         (s) => {
           setGameState('GAMEOVER');
@@ -46,6 +55,21 @@ export const StackGame: React.FC = () => {
         () => {
           setShowSlip(true);
           setTimeout(() => setShowSlip(false), 1500);
+        },
+        (streak) => setPerfectStreak(streak),
+        (active, durationMs) => {
+          setIsExecActive(active);
+          setExecTimeLeft(durationMs);
+          if (active) {
+            confetti({
+              particleCount: 85,
+              spread: 60,
+              origin: { y: 0.75 }
+            });
+          }
+        },
+        (remainingMs) => {
+          setExecTimeLeft(remainingMs);
         }
       );
       managerRef.current = manager;
@@ -63,6 +87,9 @@ export const StackGame: React.FC = () => {
         setWeatherTransition(0);
         setShowPerfect(false);
         setShowSlip(false);
+        setPerfectStreak(0);
+        setIsExecActive(false);
+        setExecTimeLeft(0);
       }
     }
   };
@@ -138,14 +165,15 @@ export const StackGame: React.FC = () => {
         {showSlip && (
           <motion.div
             id="slippery-slip-text"
-            initial={{ opacity: 0, y: -40, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.9 }}
-            className="absolute top-36 left-0 right-0 flex justify-center z-30 pointer-events-none"
+            initial={{ opacity: 0, scale: 0.5 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 1.5 }}
+            className="absolute inset-0 flex items-center justify-center z-30 pointer-events-none"
           >
-            <div className="bg-amber-500/90 text-white px-6 py-2.5 rounded-full shadow-lg backdrop-blur-md border border-amber-400 font-bold flex items-center gap-2 text-sm tracking-wider uppercase">
-              <span className="animate-bounce">🌧️</span>
-              <span>Slipped on Wet Block!</span>
+            <div className="bg-slate-900 px-10 py-4 rounded-full shadow-2xl backdrop-blur-md bg-opacity-90 border border-sky-500/30">
+              <span className="text-sky-400 font-black text-3xl uppercase tracking-[0.2em] whitespace-nowrap">
+                Slipped!
+              </span>
             </div>
           </motion.div>
         )}
@@ -213,12 +241,63 @@ export const StackGame: React.FC = () => {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 10 }}
-          className="absolute bottom-12 left-0 right-0 z-10 flex justify-center pointer-events-none"
+          className="absolute bottom-24 left-0 right-0 z-10 flex justify-center pointer-events-none"
         >
           <div className={`px-6 py-2 rounded-full transition-colors duration-500 ${weatherTransition > 0.4 ? 'bg-white/10' : 'bg-slate-800/10'} backdrop-blur-sm`}>
             <div className={`text-[10px] font-bold tracking-[0.2em] uppercase transition-colors duration-500 ${weatherTransition > 0.4 ? 'text-slate-200' : 'text-slate-500'}`}>
               Tap anywhere to drop
             </div>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Executive Floor Streak Meter HUD */}
+      {gameState === 'PLAYING' && (
+        <motion.div
+          id="executive-streak-meter"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 w-64 max-w-sm flex flex-col items-center pointer-events-none font-sans"
+        >
+          {/* Label with dynamic color based on mode and background brightness */}
+          <div className="flex items-center justify-between w-full mb-1.5 px-1 select-none">
+            <span className={`text-[10px] font-black tracking-widest uppercase transition-colors duration-300 ${
+              isExecActive 
+                ? 'text-amber-400 animate-pulse font-extrabold drop-shadow-[0_0_8px_rgba(245,158,11,0.5)]' 
+                : weatherTransition > 0.4 ? 'text-slate-300' : 'text-slate-600'
+            }`}>
+              {isExecActive ? '👑 Executive Mode' : 'Perfect Streak'}
+            </span>
+            <span className={`text-[10px] font-mono font-black transition-colors duration-300 ${
+              isExecActive 
+                ? 'text-amber-300 drop-shadow-[0_0_8px_rgba(251,191,36,0.5)]' 
+                : weatherTransition > 0.4 ? 'text-slate-300' : 'text-slate-600'
+            }`}>
+              {isExecActive ? `${(execTimeLeft / 1000).toFixed(1)}s` : `${perfectStreak}/5`}
+            </span>
+          </div>
+
+          {/* Bar track */}
+          <div className={`w-full h-3.5 rounded-full overflow-hidden p-0.5 backdrop-blur-md transition-all duration-500 ${
+            isExecActive 
+              ? 'bg-amber-950/45 border border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.3)] scale-102 font-bold' 
+              : 'bg-black/20 border border-white/10'
+          }`}>
+            {/* Slide container bar */}
+            <motion.div 
+              className={`h-full rounded-full transition-all duration-75 ${
+                isExecActive 
+                  ? 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 shadow-[0_0_10px_rgba(251,191,36,0.9)]' 
+                  : 'bg-indigo-500 shadow-[0_0_5px_rgba(99,102,241,0.5)]'
+              }`}
+              initial={{ width: '0%' }}
+              animate={{ 
+                width: isExecActive 
+                  ? `${(execTimeLeft / 10000) * 100}%` 
+                  : `${(perfectStreak / 5) * 100}%` 
+              }}
+              transition={{ type: 'tween', ease: isExecActive ? 'linear' : 'easeOut' }}
+            />
           </div>
         </motion.div>
       )}
