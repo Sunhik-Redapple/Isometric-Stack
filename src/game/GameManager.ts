@@ -5,7 +5,7 @@ export type GameState = 'START' | 'PLAYING' | 'GAMEOVER';
 
 interface Block {
   mesh: THREE.Mesh;
-  material: THREE.Material;
+  material: THREE.Material | THREE.Material[];
   width: number;
   depth: number;
   x: number;
@@ -19,6 +19,304 @@ interface FlyingPerson {
   startPos: THREE.Vector3;
   progress: number;
   speed: number;
+}
+
+// Procedural texture generator helpers
+function hexToRgb(hex: string) {
+  const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return result ? {
+    r: parseInt(result[1], 16),
+    g: parseInt(result[2], 16),
+    b: parseInt(result[3], 16)
+  } : { r: 128, g: 128, b: 128 };
+}
+
+function rgbToHsl(r: number, g: number, b: number) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h /= 6;
+  }
+  return { h: Math.round(h * 360), s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+
+function blendColorWithOffset(hex: string, lOffset: number, sOffset: number): string {
+  const rgb = hexToRgb(hex);
+  const hsl = rgbToHsl(rgb.r, rgb.g, rgb.b);
+  const h = hsl.h;
+  const s = Math.max(0, Math.min(100, hsl.s + sOffset));
+  const l = Math.max(0, Math.min(100, hsl.l + lOffset));
+  return `hsl(${h}, ${s}%, ${l}%)`;
+}
+
+function generateProceduralTexture(colorHex: string): THREE.Texture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d')!;
+
+  // Determine material style based on the color to match structural design
+  let style: 'brick' | 'concrete' | 'metal' | 'stone' | 'tile' = 'concrete';
+  
+  const c = colorHex.toLowerCase();
+  if (c === '#b91c1c' || c === '#ea580c' || c === '#b45309') {
+    style = 'brick';
+  } else if (c === '#d4d4d8' || c === '#71717a' || c === '#a3a3a3') {
+    style = 'metal';
+  } else if (c === '#a8a29e' || c === '#78716c') {
+    style = 'stone';
+  } else if (c === '#f8fafc' || c === '#e5e5e5') {
+    style = 'tile';
+  } else {
+    style = 'concrete';
+  }
+
+  // Draw the background color
+  ctx.fillStyle = colorHex;
+  ctx.fillRect(0, 0, 512, 512);
+
+  // Helper to get noise (small grain)
+  const addGrain = (intensity: number) => {
+    const imgData = ctx.getImageData(0, 0, 512, 512);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const rand = (Math.random() - 0.5) * intensity;
+      data[i] = Math.max(0, Math.min(255, data[i] + rand));
+      data[i+1] = Math.max(0, Math.min(255, data[i+1] + rand));
+      data[i+2] = Math.max(0, Math.min(255, data[i+2] + rand));
+    }
+    ctx.putImageData(imgData, 0, 0);
+  };
+
+  // Helper to add large organic noise (dirt/grunge/smudge)
+  const addSmudges = (count: number, BaseOpacity: number) => {
+    for (let i = 0; i < count; i++) {
+      const x = Math.random() * 512;
+      const y = Math.random() * 512;
+      const size = 30 + Math.random() * 80;
+      const grad = ctx.createRadialGradient(x, y, 0, x, y, size);
+      const shade = Math.random() > 0.5 ? 255 : 0;
+      const alpha = Math.random() * BaseOpacity;
+      grad.addColorStop(0, `rgba(${shade}, ${shade}, ${shade}, ${alpha})`);
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(x, y, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  };
+
+  if (style === 'brick') {
+    // STYLE 1: DUSTY URBAN CLAY BRICKS
+    const rows = 12;
+    const cols = 6;
+    const rowHeight = 512 / rows;
+    const colWidth = 512 / cols;
+
+    for (let r = 0; r < rows; r++) {
+      const y = r * rowHeight;
+      const xShift = (r % 2) * (colWidth / 2);
+      
+      for (let c = -1; c <= cols; c++) {
+        const x = c * colWidth + xShift;
+        const l = Math.random() * 20 - 10;
+        const s = Math.random() * 15 - 7.5;
+        ctx.fillStyle = blendColorWithOffset(colorHex, l, s);
+        ctx.fillRect(x + 2, y + 2, colWidth - 4, rowHeight - 4);
+
+        // Brick organic noise
+        ctx.fillStyle = 'rgba(0,0,0,0.08)';
+        for (let k = 0; k < 10; k++) {
+          ctx.fillRect(
+            x + 5 + Math.random() * (colWidth - 10),
+            y + 5 + Math.random() * (rowHeight - 10),
+            1 + Math.random() * 3,
+            1 + Math.random() * 3
+          );
+        }
+      }
+    }
+
+    // Draw mortar joints
+    ctx.strokeStyle = 'rgba(230,225,220,0.4)';
+    ctx.lineWidth = 3;
+    for (let r = 1; r < rows; r++) {
+      ctx.beginPath();
+      ctx.moveTo(0, r * rowHeight);
+      ctx.lineTo(512, r * rowHeight);
+      ctx.stroke();
+    }
+    for (let r = 0; r < rows; r++) {
+      const xShift = (r % 2) * (colWidth / 2);
+      for (let c = 0; c <= cols; c++) {
+        ctx.beginPath();
+        const x = c * colWidth + xShift;
+        ctx.moveTo(x, r * rowHeight);
+        ctx.lineTo(x, (r + 1) * rowHeight);
+        ctx.stroke();
+      }
+    }
+    addGrain(35);
+    addSmudges(4, 0.1);
+
+  } else if (style === 'concrete') {
+    // STYLE 2: RAW ARCHITECTURAL CONCRETE PANELS WITH TIE-ROD PLUG HOLES
+    addSmudges(12, 0.15);
+    addGrain(28);
+
+    // Bevel tile lines (concrete panel grid)
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(256, 0); ctx.lineTo(256, 512);
+    ctx.moveTo(0, 256); ctx.lineTo(512, 256);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(258, 0); ctx.lineTo(258, 512);
+    ctx.moveTo(0, 258); ctx.lineTo(512, 258);
+    ctx.stroke();
+
+    // Concrete Tie-rod plug holes
+    const drawTieHole = (cx: number, cy: number) => {
+      ctx.beginPath();
+      ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(cx - 1, cy - 1, 4, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.08)';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    };
+
+    const offsets = [25, 231, 281, 487];
+    offsets.forEach(x => {
+      offsets.forEach(y => {
+        drawTieHole(x, y);
+      });
+    });
+
+  } else if (style === 'metal') {
+    // STYLE 3: HIGH-TECH RIBBED VERTICAL METALLIC SIDING
+    const stripes = 16;
+    const stripeWidth = 512 / stripes;
+
+    for (let i = 0; i < stripes; i++) {
+      const grad = ctx.createLinearGradient(i * stripeWidth, 0, (i + 1) * stripeWidth, 0);
+      grad.addColorStop(0, 'rgba(255,255,255,0.12)');
+      grad.addColorStop(0.3, 'rgba(255,255,255,0.04)');
+      grad.addColorStop(0.7, 'rgba(0,0,0,0.12)');
+      grad.addColorStop(1, 'rgba(0,0,0,0.18)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(i * stripeWidth, 0, stripeWidth, 512);
+    }
+
+    // Horizontal panel joins
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, 128); ctx.lineTo(512, 128);
+    ctx.moveTo(0, 256); ctx.lineTo(512, 256);
+    ctx.moveTo(0, 384); ctx.lineTo(512, 384);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, 129); ctx.lineTo(512, 129);
+    ctx.moveTo(0, 257); ctx.lineTo(512, 257);
+    ctx.moveTo(0, 385); ctx.lineTo(512, 385);
+    ctx.stroke();
+
+    addGrain(20);
+    // Vertical brushed metal lines
+    for (let k = 0; k < 40; k++) {
+      ctx.fillStyle = Math.random() > 0.5 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)';
+      ctx.fillRect(Math.random() * 512, 0, 1 + Math.random() * 2, 512);
+    }
+
+  } else if (style === 'stone') {
+    // STYLE 4: COARSE STACKED STONEWALL WITH NATURAL VARIATIONS
+    const rows = 16;
+    const rowHeight = 512 / rows;
+
+    for (let r = 0; r < rows; r++) {
+      const y = r * rowHeight;
+      let x = 0;
+      while (x < 512) {
+        const stoneWidth = 40 + Math.random() * 90;
+        const actualWidth = Math.min(stoneWidth, 512 - x);
+
+        const lShift = Math.random() * 24 - 12;
+        const sShift = Math.random() * 10 - 5;
+        ctx.fillStyle = blendColorWithOffset(colorHex, lShift, sShift);
+        ctx.fillRect(x, y, actualWidth, rowHeight);
+
+        ctx.fillStyle = 'rgba(255,255,255,0.06)';
+        ctx.fillRect(x + 2, y + 2, actualWidth - 4, 3);
+        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.fillRect(x + 2, y + rowHeight - 4, actualWidth - 4, 2);
+
+        x += stoneWidth;
+      }
+    }
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.lineWidth = 2.5;
+    for (let r = 1; r < rows; r++) {
+      ctx.beginPath();
+      ctx.moveTo(0, r * rowHeight);
+      ctx.lineTo(512, r * rowHeight);
+      ctx.stroke();
+    }
+    
+    addGrain(30);
+    addSmudges(5, 0.1);
+
+  } else if (style === 'tile') {
+    // STYLE 5: CONTEMPORARY CERAMIC TILE CLADDING
+    const gridSize = 64;
+    addGrain(15);
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.lineWidth = 1.5;
+    for (let i = 1; i < 8; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * gridSize, 0); ctx.lineTo(i * gridSize, 512);
+      ctx.moveTo(0, i * gridSize); ctx.lineTo(512, i * gridSize);
+      ctx.stroke();
+    }
+    addSmudges(3, 0.08);
+  }
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.RepeatWrapping;
+  texture.generateMipmaps = true;
+  texture.minFilter = THREE.LinearMipmapLinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.anisotropy = 4;
+
+  return texture;
 }
 
 export class GameManager {
@@ -67,25 +365,37 @@ export class GameManager {
   private direction: 'x' | 'z' = 'x';
   private speed: number = ANIMATION_SPEED;
   private moveOffset: number = 0;
+  private swingMoveOffset: number = 0;
   private colorIndex: number = 0;
 
   private onScoreUpdate?: (score: number) => void;
   private onGameOver?: (score: number) => void;
   private onPerfect?: () => void;
   private onWeatherUpdate?: (transition: number) => void;
+  private onSlip?: () => void;
+
+  private isSlipping: boolean = false;
+  private slipProgress: number = 0;
+  private slipStartX: number = 0;
+  private slipTargetX: number = 0;
+  private slipStartZ: number = 0;
+  private slipTargetZ: number = 0;
+  private splashParticles: { mesh: THREE.Mesh; vx: number; vy: number; vz: number; life: number }[] = [];
 
   constructor(
     container: HTMLElement, 
     onScoreUpdate?: (score: number) => void, 
     onGameOver?: (score: number) => void,
     onPerfect?: () => void,
-    onWeatherUpdate?: (transition: number) => void
+    onWeatherUpdate?: (transition: number) => void,
+    onSlip?: () => void
   ) {
     this.container = container;
     this.onScoreUpdate = onScoreUpdate;
     this.onGameOver = onGameOver;
     this.onPerfect = onPerfect;
     this.onWeatherUpdate = onWeatherUpdate;
+    this.onSlip = onSlip;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#f0f2f5');
@@ -140,12 +450,36 @@ export class GameManager {
     
     // Main block
     const geometry = new THREE.BoxGeometry(width, height, depth);
-    const material = new THREE.MeshStandardMaterial({ 
-      color: color,
-      roughness: 0.2,
-      metalness: 0.1,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
+
+    // Create unique procedural textures for each face orientation to prevent stretching
+    const texRight = generateProceduralTexture(color);
+    texRight.repeat.set(depth / 3.0, height / 3.0);
+
+    const texLeft = texRight.clone();
+    texLeft.repeat.set(depth / 3.0, height / 3.0);
+
+    const texTop = generateProceduralTexture(color);
+    texTop.repeat.set(width / 3.0, depth / 3.0);
+
+    const texBottom = texTop.clone();
+    texBottom.repeat.set(width / 3.0, depth / 3.0);
+
+    const texFront = generateProceduralTexture(color);
+    texFront.repeat.set(width / 3.0, height / 3.0);
+
+    const texBack = texFront.clone();
+    texBack.repeat.set(width / 3.0, height / 3.0);
+
+    const matRight = new THREE.MeshStandardMaterial({ color, map: texRight, roughness: 0.45, metalness: 0.1 });
+    const matLeft = new THREE.MeshStandardMaterial({ color, map: texLeft, roughness: 0.45, metalness: 0.1 });
+    const matTop = new THREE.MeshStandardMaterial({ color, map: texTop, roughness: 0.5, metalness: 0.05 });
+    const matBottom = new THREE.MeshStandardMaterial({ color, map: texBottom, roughness: 0.5, metalness: 0.05 });
+    const matFront = new THREE.MeshStandardMaterial({ color, map: texFront, roughness: 0.45, metalness: 0.1 });
+    const matBack = new THREE.MeshStandardMaterial({ color, map: texBack, roughness: 0.45, metalness: 0.1 });
+
+    const materialArray = [matRight, matLeft, matTop, matBottom, matFront, matBack];
+
+    const mesh = new THREE.Mesh(geometry, materialArray);
     group.add(mesh);
 
     // Add windows like in the image
@@ -211,7 +545,7 @@ export class GameManager {
     );
     group.add(line);
 
-    return { group, mesh, line, geometry, material, windowMaterials };
+    return { group, mesh, line, geometry, material: materialArray, windowMaterials };
   }
 
   private initBase() {
@@ -219,12 +553,23 @@ export class GameManager {
     const platformSize = INITIAL_BLOCK_SIZE * 3.5;
     const platformHeight = 2.8; // Reduced by 30% (from 4)
     const foundationGeom = new THREE.BoxGeometry(platformSize, platformHeight, platformSize);
-    const foundationMat = new THREE.MeshStandardMaterial({ 
-      color: '#1e293b', // Even deeper slate
-      roughness: 1,
-      metalness: 0 
-    });
-    const foundation = new THREE.Mesh(foundationGeom, foundationMat);
+
+    // Create base foundation concrete textures
+    const texBaseTop = generateProceduralTexture('#1e293b');
+    texBaseTop.repeat.set(platformSize / 3.0, platformSize / 3.0);
+    const texBaseSide = generateProceduralTexture('#1e293b');
+    texBaseSide.repeat.set(platformSize / 3.0, platformHeight / 3.0);
+
+    const foundationMatArray = [
+      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseSide, roughness: 0.7, metalness: 0.1 }), // +X
+      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseSide.clone(), roughness: 0.7, metalness: 0.1 }), // -X
+      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseTop, roughness: 0.8, metalness: 0.05 }), // +Y
+      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseTop.clone(), roughness: 0.8, metalness: 0.05 }), // -Y
+      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseSide.clone(), roughness: 0.7, metalness: 0.1 }), // +Z
+      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseSide.clone(), roughness: 0.7, metalness: 0.1 })  // -Z
+    ];
+
+    const foundation = new THREE.Mesh(foundationGeom, foundationMatArray);
     
     // Add edges for detail
     const edges = new THREE.EdgesGeometry(foundationGeom);
@@ -238,7 +583,7 @@ export class GameManager {
 
     this.stack.push({
       mesh: foundation as any,
-      material: foundationMat,
+      material: foundationMatArray,
       width: platformSize,
       depth: platformSize,
       x: 0,
@@ -296,9 +641,13 @@ export class GameManager {
     this.direction = 'x';
     this.colorIndex = 0;
     this.moveOffset = 0;
+    this.swingMoveOffset = 0;
     this.isDropping = false;
     this.weatherTransition = 0;
     this.windIntensity = 0;
+    this.isSlipping = false;
+    this.splashParticles.forEach(sp => this.scene.remove(sp.mesh));
+    this.splashParticles = [];
     this.scene.background = this.initialSkyColor.clone();
     if (this.rainSystem) this.rainSystem.visible = false;
     if (this.windStreaks) this.windStreaks.visible = false;
@@ -749,7 +1098,7 @@ export class GameManager {
   private animate = () => {
     requestAnimationFrame(this.animate);
 
-    // Global sway clock - speed up by 20% during weather transition
+    // Global sway clock (for tower/block sway) - speed up by 20% during weather transition
     // and apply wind resistance (slow down when moving against wind)
     const windComponent = this.direction === 'x' ? this.windDirection.x : this.windDirection.z;
     const moveCos = Math.cos(this.moveOffset);
@@ -758,6 +1107,16 @@ export class GameManager {
     const windResistance = 1 + this.windIntensity * (resistanceFactor - 1);
     
     this.moveOffset += this.speed * (1 + this.weatherTransition * 0.2) * windResistance;
+
+    // Swing clock (for rope block swing) - speed up by 10% in the rainy season/transition
+    // and also apply wind resistance
+    const swingCos = Math.cos(this.swingMoveOffset);
+    const isSwingMovingAgainstWind = (swingCos * windComponent) < 0;
+    const swingResistanceFactor = isSwingMovingAgainstWind ? 0.75 : 1.0;
+    const swingWindResistance = 1 + this.windIntensity * (swingResistanceFactor - 1);
+    const rainSwingModifier = 1 + this.weatherTransition * 0.1; // 10% faster during rain
+
+    this.swingMoveOffset += this.speed * rainSwingModifier * swingWindResistance;
 
     // Calculate tower sway if height > 15
     let baseSway = 0;
@@ -833,9 +1192,13 @@ export class GameManager {
       });
 
       // Subtle vibrancy boost for the block body
-      const blockMat = block.material as THREE.MeshStandardMaterial;
       const vibrancy = this.weatherTransition * 0.2;
-      blockMat.emissive.copy(blockMat.color).multiplyScalar(vibrancy);
+      const mats = Array.isArray(block.material) ? block.material : [block.material];
+      mats.forEach(mat => {
+        if (mat instanceof THREE.MeshStandardMaterial) {
+          mat.emissive.copy(mat.color).multiplyScalar(vibrancy);
+        }
+      });
     });
     
     if (this.currentBlock) {
@@ -844,9 +1207,13 @@ export class GameManager {
         mat.emissiveIntensity = emissiveIntensity;
       });
 
-      const blockMat = this.currentBlock.material as THREE.MeshStandardMaterial;
       const vibrancy = this.weatherTransition * 0.2;
-      blockMat.emissive.copy(blockMat.color).multiplyScalar(vibrancy);
+      const mats = Array.isArray(this.currentBlock.material) ? this.currentBlock.material : [this.currentBlock.material];
+      mats.forEach(mat => {
+        if (mat instanceof THREE.MeshStandardMaterial) {
+          mat.emissive.copy(mat.color).multiplyScalar(vibrancy);
+        }
+      });
     }
 
     // Lightning effect
@@ -901,9 +1268,9 @@ export class GameManager {
         const windComponent = this.direction === 'x' ? this.windDirection.x : this.windDirection.z;
         const windBias = windComponent * this.windIntensity * 3;
         // Surge effect: increase displacement when swinging in the direction of the wind
-        const windSurge = Math.max(0, Math.sin(this.moveOffset) * windComponent) * this.windIntensity * 5;
+        const windSurge = Math.max(0, Math.sin(this.swingMoveOffset) * windComponent) * this.windIntensity * 5;
         
-        const swingOffset = Math.sin(this.moveOffset) * 9 + windBias + windSurge;
+        const swingOffset = Math.sin(this.swingMoveOffset) * 9 + windBias + windSurge;
         
         // Position relative to current swayed top of tower
         if (this.direction === 'x') {
@@ -920,14 +1287,82 @@ export class GameManager {
           this.shadowMesh.position.z = this.currentBlock.mesh.position.z;
           // Sway shadow y position slightly if needed or keep static on top of block
         }
-      } else {
+      } else if (!this.isSlipping) {
         // Drop logic
         this.dropVelocity += 0.25;
         this.currentBlock.mesh.position.y -= this.dropVelocity;
 
         if (this.currentBlock.mesh.position.y <= targetCenterY) {
           this.currentBlock.mesh.position.y = targetCenterY;
+          
+          // Slippery physics in rainy weather
+          const isRainyPhase = this.score >= 10 && this.score < 35;
+          if (isRainyPhase && this.weatherTransition > 0.01 && this.stack.length > 0) {
+            const lastBlock = this.stack[this.stack.length - 1];
+            const relDiff = this.direction === 'x'
+              ? this.currentBlock.mesh.position.x - lastBlock.mesh.position.x
+              : this.currentBlock.mesh.position.z - lastBlock.mesh.position.z;
+            
+            const perfectThreshold = INITIAL_BLOCK_SIZE * 0.1;
+            const isPerfect = Math.abs(relDiff) < perfectThreshold;
+
+            if (!isPerfect) {
+              const willSlip = Math.random() < 0.40;
+              if (willSlip) {
+                this.isSlipping = true;
+                this.slipProgress = 0;
+                this.slipStartX = this.currentBlock.mesh.position.x;
+                this.slipStartZ = this.currentBlock.mesh.position.z;
+
+                const slipSign = relDiff >= 0 ? 1 : -1;
+                const baseSlip = 0.4 + Math.random() * 0.5; // Slip distance
+                const scaleSlip = Math.abs(relDiff) * 0.2;
+                const totalSlip = (baseSlip + scaleSlip) * slipSign * this.weatherTransition;
+
+                if (this.direction === 'x') {
+                  this.slipTargetX = this.slipStartX + totalSlip;
+                  this.slipTargetZ = this.slipStartZ;
+                } else {
+                  this.slipTargetX = this.slipStartX;
+                  this.slipTargetZ = this.slipStartZ + totalSlip;
+                }
+
+                if (this.currentWire) {
+                  this.scene.remove(this.currentWire);
+                  this.currentWire = null;
+                }
+                if (this.shadowMesh) this.shadowMesh.visible = false;
+
+                this.spawnSlipperySplash(this.currentBlock.mesh.position, this.direction === 'x' ? totalSlip : 0, this.direction === 'z' ? totalSlip : 0);
+                if (this.onSlip) this.onSlip();
+              } else {
+                this.placeBlock();
+              }
+            } else {
+              this.placeBlock();
+            }
+          } else {
+            this.placeBlock();
+          }
+        }
+      } else {
+        // Slipping/sliding animation behavior
+        this.slipProgress += 0.08;
+        if (this.slipProgress >= 1) {
+          this.slipProgress = 1;
+          this.currentBlock.mesh.position.x = this.slipTargetX;
+          this.currentBlock.mesh.position.z = this.slipTargetZ;
+          this.isSlipping = false;
           this.placeBlock();
+        } else {
+          const t = this.slipProgress;
+          const easeOut = t * (2 - t);
+          this.currentBlock.mesh.position.x = THREE.MathUtils.lerp(this.slipStartX, this.slipTargetX, easeOut);
+          this.currentBlock.mesh.position.z = THREE.MathUtils.lerp(this.slipStartZ, this.slipTargetZ, easeOut);
+          
+          if (Math.random() < 0.4) {
+            this.spawnSplashDrip(this.currentBlock.mesh.position);
+          }
         }
       }
 
@@ -1085,6 +1520,30 @@ export class GameManager {
       }
     }
 
+    // Animate splash particles
+    for (let i = this.splashParticles.length - 1; i >= 0; i--) {
+      const sp = this.splashParticles[i];
+      sp.mesh.position.x += sp.vx;
+      sp.mesh.position.y += sp.vy;
+      sp.mesh.position.z += sp.vz;
+      
+      // Gravity
+      sp.vy -= 0.012;
+      
+      sp.life -= 0.035;
+      sp.mesh.scale.setScalar(sp.life);
+      
+      if (sp.mesh.material instanceof THREE.Material) {
+        sp.mesh.material.opacity = sp.life * 0.82;
+      }
+
+      if (sp.life <= 0) {
+        this.scene.remove(sp.mesh);
+        sp.mesh.geometry.dispose();
+        this.splashParticles.splice(i, 1);
+      }
+    }
+
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -1112,6 +1571,64 @@ export class GameManager {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
   };
+
+  private spawnSlipperySplash(pos: THREE.Vector3, slipX: number, slipZ: number) {
+    const particleCount = 15;
+    const geom = new THREE.SphereGeometry(0.12, 4, 4);
+    const mat = new THREE.MeshBasicMaterial({
+      color: '#93c5fd', // Light Blue
+      transparent: true,
+      opacity: 0.8
+    });
+
+    for (let i = 0; i < particleCount; i++) {
+      const mesh = new THREE.Mesh(geom, mat);
+      mesh.position.copy(pos);
+      mesh.position.y -= BLOCK_HEIGHT / 2; // Bottom of particle block
+      
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 0.05 + Math.random() * 0.15;
+      const vx = Math.cos(angle) * speed + slipX * 0.15;
+      const vz = Math.sin(angle) * speed + slipZ * 0.15;
+      const vy = 0.08 + Math.random() * 0.15;
+      
+      this.scene.add(mesh);
+      this.splashParticles.push({
+        mesh,
+        vx,
+        vy,
+        vz,
+        life: 1.0
+      });
+    }
+  }
+
+  private spawnSplashDrip(pos: THREE.Vector3) {
+    const geom = new THREE.SphereGeometry(0.08, 3, 3);
+    const mat = new THREE.MeshBasicMaterial({
+      color: '#60a5fa',
+      transparent: true,
+      opacity: 0.6
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.position.copy(pos);
+    mesh.position.y -= BLOCK_HEIGHT / 2;
+    mesh.position.x += (Math.random() - 0.5) * INITIAL_BLOCK_SIZE;
+    mesh.position.z += (Math.random() - 0.5) * INITIAL_BLOCK_SIZE;
+
+    const vx = (Math.random() - 0.5) * 0.03;
+    const vz = (Math.random() - 0.5) * 0.03;
+    const vy = 0.03 + Math.random() * 0.05;
+
+    this.scene.add(mesh);
+    this.splashParticles.push({
+      mesh,
+      vx,
+      vy,
+      vz,
+      life: 0.6
+    });
+  }
 
   public dispose() {
     window.removeEventListener('resize', this.handleResize);

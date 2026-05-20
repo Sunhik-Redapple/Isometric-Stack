@@ -12,6 +12,7 @@ export const StackGame: React.FC = () => {
   const [weatherTransition, setWeatherTransition] = useState(0);
   const [gameState, setGameState] = useState<'START' | 'PLAYING' | 'GAMEOVER'>('START');
   const [showPerfect, setShowPerfect] = useState(false);
+  const [showSlip, setShowSlip] = useState(false);
   const [highScore, setHighScore] = useState(() => {
     const saved = localStorage.getItem('stack-high-score');
     return saved ? parseInt(saved, 10) : 0;
@@ -41,7 +42,11 @@ export const StackGame: React.FC = () => {
           setShowPerfect(true);
           setTimeout(() => setShowPerfect(false), 1500);
         },
-        (t) => setWeatherTransition(t)
+        (t) => setWeatherTransition(t),
+        () => {
+          setShowSlip(true);
+          setTimeout(() => setShowSlip(false), 1500);
+        }
       );
       managerRef.current = manager;
       return () => manager.dispose();
@@ -56,6 +61,8 @@ export const StackGame: React.FC = () => {
         setScore(0);
         setPopulation(0);
         setWeatherTransition(0);
+        setShowPerfect(false);
+        setShowSlip(false);
       }
     }
   };
@@ -121,6 +128,24 @@ export const StackGame: React.FC = () => {
               <span className="text-white font-black text-3xl uppercase tracking-[0.2em] whitespace-nowrap">
                 Perfect!
               </span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Slippery Slip Notification */}
+      <AnimatePresence>
+        {showSlip && (
+          <motion.div
+            id="slippery-slip-text"
+            initial={{ opacity: 0, y: -40, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.9 }}
+            className="absolute top-36 left-0 right-0 flex justify-center z-30 pointer-events-none"
+          >
+            <div className="bg-amber-500/90 text-white px-6 py-2.5 rounded-full shadow-lg backdrop-blur-md border border-amber-400 font-bold flex items-center gap-2 text-sm tracking-wider uppercase">
+              <span className="animate-bounce">🌧️</span>
+              <span>Slipped on Wet Block!</span>
             </div>
           </motion.div>
         )}
