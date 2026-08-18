@@ -1,7 +1,7 @@
 import * as THREE from 'three';
-import { BLOCK_HEIGHT, INITIAL_BLOCK_SIZE, COLORS, ANIMATION_SPEED, SPEED_INCREMENT, CAMERA_OFFSET } from './constants';
+import { BLOCK_HEIGHT, INITIAL_BLOCK_SIZE, COLORS, RAIN_COLORS, WINDY_COLORS, ANIMATION_SPEED, SPEED_INCREMENT, CAMERA_OFFSET } from './constants';
 
-export type GameState = 'START' | 'PLAYING' | 'GAMEOVER';
+export type GameState = 'START' | 'PLAYING' | 'GAMEOVER' | 'TOWER_REVEAL';
 
 interface Block {
   mesh: THREE.Mesh;
@@ -348,9 +348,10 @@ export class GameManager {
   private lightningIntensity: number = 0;
   private ambientLight: THREE.AmbientLight | null = null;
   private directionalLight: THREE.DirectionalLight | null = null;
-  private initialSkyColor = new THREE.Color('#f0f2f5');
-  private cloudySkyColor = new THREE.Color('#020617'); // Deep night sky
-  private litWindowColor = new THREE.Color('#fcd34d'); // Amber-300
+  private initialSkyColor = new THREE.Color('#faf0d3');
+  private cloudySkyColor = new THREE.Color('#202633'); // Cool rainy slate navy sky (Palette Anchor 1)
+  private windySkyColor = new THREE.Color('#22252a'); // Deep storm charcoal/black from the new palette (Bar 3)
+  private litWindowColor = new THREE.Color('#fbbf24'); // Amber/Gold warm glow
   private lightningColor = new THREE.Color('#ffffff'); // Pure white for peak flash
   private lightningSubFlash: boolean = false;
   private currentWire: THREE.Mesh | null = null;
@@ -377,6 +378,9 @@ export class GameManager {
   private onStreakUpdate?: (streak: number) => void;
   private onExecPhaseStateChange?: (active: boolean, durationMs: number) => void;
   private onExecTimerTick?: (remainingMs: number) => void;
+  private onPersonArrival?: () => void;
+  private onTowerReveal?: () => void;
+  private revealStartTime: number = 0;
 
   private isSlipping: boolean = false;
   private slipProgress: number = 0;
@@ -400,7 +404,9 @@ export class GameManager {
     onSlip?: () => void,
     onStreakUpdate?: (streak: number) => void,
     onExecPhaseStateChange?: (active: boolean, durationMs: number) => void,
-    onExecTimerTick?: (remainingMs: number) => void
+    onExecTimerTick?: (remainingMs: number) => void,
+    onPersonArrival?: () => void,
+    onTowerReveal?: () => void
   ) {
     this.container = container;
     this.onScoreUpdate = onScoreUpdate;
@@ -411,6 +417,8 @@ export class GameManager {
     this.onStreakUpdate = onStreakUpdate;
     this.onExecPhaseStateChange = onExecPhaseStateChange;
     this.onExecTimerTick = onExecTimerTick;
+    this.onPersonArrival = onPersonArrival;
+    this.onTowerReveal = onTowerReveal;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#f0f2f5');
@@ -574,18 +582,18 @@ export class GameManager {
     const foundationGeom = new THREE.BoxGeometry(platformSize, platformHeight, platformSize);
 
     // Create base foundation concrete textures
-    const texBaseTop = generateProceduralTexture('#1e293b');
+    const texBaseTop = generateProceduralTexture('#750704');
     texBaseTop.repeat.set(platformSize / 3.0, platformSize / 3.0);
-    const texBaseSide = generateProceduralTexture('#1e293b');
+    const texBaseSide = generateProceduralTexture('#750704');
     texBaseSide.repeat.set(platformSize / 3.0, platformHeight / 3.0);
 
     const foundationMatArray = [
-      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseSide, roughness: 0.7, metalness: 0.1 }), // +X
-      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseSide.clone(), roughness: 0.7, metalness: 0.1 }), // -X
-      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseTop, roughness: 0.8, metalness: 0.05 }), // +Y
-      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseTop.clone(), roughness: 0.8, metalness: 0.05 }), // -Y
-      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseSide.clone(), roughness: 0.7, metalness: 0.1 }), // +Z
-      new THREE.MeshStandardMaterial({ color: '#1e293b', map: texBaseSide.clone(), roughness: 0.7, metalness: 0.1 })  // -Z
+      new THREE.MeshStandardMaterial({ color: '#750704', map: texBaseSide, roughness: 0.7, metalness: 0.1 }), // +X
+      new THREE.MeshStandardMaterial({ color: '#750704', map: texBaseSide.clone(), roughness: 0.7, metalness: 0.1 }), // -X
+      new THREE.MeshStandardMaterial({ color: '#750704', map: texBaseTop, roughness: 0.8, metalness: 0.05 }), // +Y
+      new THREE.MeshStandardMaterial({ color: '#750704', map: texBaseTop.clone(), roughness: 0.8, metalness: 0.05 }), // -Y
+      new THREE.MeshStandardMaterial({ color: '#750704', map: texBaseSide.clone(), roughness: 0.7, metalness: 0.1 }), // +Z
+      new THREE.MeshStandardMaterial({ color: '#750704', map: texBaseSide.clone(), roughness: 0.7, metalness: 0.1 })  // -Z
     ];
 
     const foundation = new THREE.Mesh(foundationGeom, foundationMatArray);
@@ -625,6 +633,10 @@ export class GameManager {
         this.isDropping = true;
         this.dropVelocity = 0;
         if (this.shadowMesh) this.shadowMesh.visible = false;
+      }
+    } else if (this.gameState === 'TOWER_REVEAL') {
+      if (Date.now() - this.revealStartTime > 800) {
+        this.gameOver();
       }
     } else if (this.gameState === 'GAMEOVER') {
       this.startGame();
@@ -682,6 +694,8 @@ export class GameManager {
     this.initBase();
     
     // Reset camera position immediately to avoid jumping
+    this.camera.zoom = 1.0;
+    this.camera.updateProjectionMatrix();
     this.camera.position.set(20, 20, 20);
     this.camera.lookAt(0, -5, 0);
   }
@@ -695,12 +709,19 @@ export class GameManager {
     this.isDropping = false;
 
     const isExecFloor = this.isExecPhaseActive;
+    const isRainyPhase = this.score >= 10 && this.score < 35;
+    const isWindyPhase = this.score >= 45 && this.score < 75;
+    const blockColor = isWindyPhase
+      ? WINDY_COLORS[this.colorIndex % WINDY_COLORS.length]
+      : (isRainyPhase 
+          ? RAIN_COLORS[this.colorIndex % RAIN_COLORS.length]
+          : COLORS[this.colorIndex]);
 
     const { group, windowMaterials } = this.createBlockMesh(
       INITIAL_BLOCK_SIZE, 
       BLOCK_HEIGHT, 
       INITIAL_BLOCK_SIZE, 
-      COLORS[this.colorIndex],
+      blockColor,
       isExecFloor
     );
 
@@ -876,7 +897,15 @@ export class GameManager {
     this.speed += SPEED_INCREMENT;
     
     // Spawn people flying with umbrellas
-    this.spawnFlyingPeople(this.currentBlock.mesh.position, COLORS[this.colorIndex], isPerfect ? 5 : 2);
+    const spawnCount = isExecFloor ? (isPerfect ? 10 : 7) : (isPerfect ? 5 : 2);
+    const isRainyPhase = this.score >= 10 && this.score < 35;
+    const isWindyPhase = this.score >= 45 && this.score < 75;
+    const spawnColor = isExecFloor 
+      ? '#fbbf24' 
+      : (isWindyPhase
+          ? WINDY_COLORS[this.colorIndex % WINDY_COLORS.length]
+          : (isRainyPhase ? RAIN_COLORS[this.colorIndex % RAIN_COLORS.length] : COLORS[this.colorIndex]));
+    this.spawnFlyingPeople(this.currentBlock.mesh.position, spawnColor, spawnCount);
 
     this.addNextBlock();
   }
@@ -900,10 +929,17 @@ export class GameManager {
     });
     this.currentBlock = null;
 
-    // Trigger game over after a slight delay
+    // Trigger tower reveal after a slight delay
     setTimeout(() => {
-      this.gameOver();
+      this.startTowerReveal();
     }, 800);
+  }
+
+  private startTowerReveal() {
+    this.gameState = 'TOWER_REVEAL';
+    this.revealStartTime = Date.now();
+    if (this.shadowMesh) this.shadowMesh.visible = false;
+    if (this.onTowerReveal) this.onTowerReveal();
   }
 
   private gameOver() {
@@ -988,7 +1024,7 @@ export class GameManager {
     geometry.setAttribute('velocity', new THREE.BufferAttribute(velocities, 1));
 
     const material = new THREE.PointsMaterial({
-      color: '#cbd5e1',
+      color: '#b5c4d6', // Light silver blue (Palette Anchor 4)
       size: 3,
       transparent: true,
       opacity: 0.85
@@ -1064,20 +1100,61 @@ export class GameManager {
 
     // 2. Flying Leaves
     this.leaves = new THREE.Group();
-    const leafColors = ['#166534', '#15803d', '#713f12', '#a16207'];
-    const leafCount = 30;
+    const leafColors = ['#555a60', '#33373b', '#22252a', '#2b2d1f', '#9f7d56']; // exact colors from the storm palette
+    const leafCount = 42; // increased by 20% for rich atmosphere
+    
+    // Create actual 5-point maple leaf shape
+    const mapleShape = new THREE.Shape();
+    mapleShape.moveTo(0, -0.2); // Stem bottom
+    mapleShape.lineTo(0.02, 0.0); // Stem right
+    
+    // Bottom right lobe
+    mapleShape.lineTo(0.15, -0.05);
+    mapleShape.lineTo(0.25, -0.1);
+    mapleShape.lineTo(0.18, 0.05);
+    
+    // Middle right lobe
+    mapleShape.lineTo(0.35, 0.08);
+    mapleShape.lineTo(0.2, 0.18);
+    
+    // Top right lobe
+    mapleShape.lineTo(0.3, 0.35);
+    mapleShape.lineTo(0.1, 0.32);
+    
+    // Center top lobe
+    mapleShape.lineTo(0, 0.55);
+    mapleShape.lineTo(-0.1, 0.32);
+    
+    // Top left lobe
+    mapleShape.lineTo(-0.3, 0.35);
+    mapleShape.lineTo(-0.2, 0.18);
+    
+    // Middle left lobe
+    mapleShape.lineTo(-0.35, 0.08);
+    mapleShape.lineTo(-0.18, 0.05);
+    
+    // Bottom left lobe
+    mapleShape.lineTo(-0.25, -0.1);
+    mapleShape.lineTo(-0.15, -0.05);
+    
+    mapleShape.lineTo(-0.02, 0.0); // Stem left
+    mapleShape.lineTo(-0.02, -0.2);
+    mapleShape.closePath();
+
+    const geometry = new THREE.ShapeGeometry(mapleShape);
     
     for (let i = 0; i < leafCount; i++) {
-      const geometry = new THREE.PlaneGeometry(0.4, 0.6);
       const material = new THREE.MeshStandardMaterial({
         color: leafColors[Math.floor(Math.random() * leafColors.length)],
-        side: THREE.DoubleSide
+        side: THREE.DoubleSide,
+        roughness: 0.6,
+        metalness: 0.1
       });
       const leaf = new THREE.Mesh(geometry, material);
       
       // Custom properties for animation
-      (leaf as any).speed = 0.5 + Math.random() * 0.5;
-      (leaf as any).rotSpeed = (Math.random() - 0.5) * 0.2;
+      (leaf as any).speed = 0.4 + Math.random() * 0.6;
+      (leaf as any).rotSpeed = (Math.random() - 0.5) * 0.15;
       (leaf as any).offset = Math.random() * 100;
       
       leaf.position.set(
@@ -1085,80 +1162,99 @@ export class GameManager {
         Math.random() * 80,
         (Math.random() - 0.5) * 100
       );
-      leaf.visible = false;
+      leaf.visible = true; // Make them visible so they can start falling immediately
       this.leaves.add(leaf);
     }
     this.scene.add(this.leaves);
   }
 
   private updateWind() {
-    if (!this.windStreaks || !this.leaves || this.windIntensity < 0.01) return;
+    if (!this.windStreaks || !this.leaves) return;
 
     const camY = this.camera.position.y;
     const time = Date.now() * 0.001;
     
+    // Baseline wind speed for leaves so they always fall, but storms blow them faster
+    const baseWind = 0.15;
+    const effectiveWind = baseWind + this.windIntensity * 1.5;
+    const windSpeed = 1.0 + this.windIntensity * 2.5;
+
     // Update Wind Streaks
     const streakPos = this.windStreaks.geometry.attributes.position.array as Float32Array;
     const streakCount = streakPos.length / 6;
-    const windSpeed = 1.5 + this.windIntensity * 2.0;
 
-    for (let i = 0; i < streakCount; i++) {
-      const idx = i * 6;
-      // Move points along wind direction
-      streakPos[idx] += windSpeed * this.windDirection.x;
-      streakPos[idx + 2] += windSpeed * this.windDirection.z;
-      streakPos[idx + 3] += windSpeed * this.windDirection.x;
-      streakPos[idx + 5] += windSpeed * this.windDirection.z;
+    if (this.windIntensity > 0.01) {
+      for (let i = 0; i < streakCount; i++) {
+        const idx = i * 6;
+        // Move points along wind direction
+        streakPos[idx] += windSpeed * this.windDirection.x;
+        streakPos[idx + 2] += windSpeed * this.windDirection.z;
+        streakPos[idx + 3] += windSpeed * this.windDirection.x;
+        streakPos[idx + 5] += windSpeed * this.windDirection.z;
 
-      // Reset streaks
-      const centerX = streakPos[idx];
-      const centerZ = streakPos[idx + 2];
-      const distFromCam = Math.sqrt(Math.pow(centerX - this.camera.position.x, 2) + Math.pow(centerZ - this.camera.position.z, 2));
-      
-      if (distFromCam > 60 || Math.abs(streakPos[idx + 1] - camY) > 40) {
-        // Respawn "upwind"
-        const dist = 50 + Math.random() * 10;
-        const x = this.camera.position.x - this.windDirection.x * dist + (Math.random() - 0.5) * 60;
-        const z = this.camera.position.z - this.windDirection.z * dist + (Math.random() - 0.5) * 60;
-        const y = camY + (Math.random() - 0.5) * 40;
+        // Reset streaks
+        const centerX = streakPos[idx];
+        const centerZ = streakPos[idx + 2];
+        const distFromCam = Math.sqrt(Math.pow(centerX - this.camera.position.x, 2) + Math.pow(centerZ - this.camera.position.z, 2));
         
-        streakPos[idx] = x;
-        streakPos[idx + 1] = y;
-        streakPos[idx + 2] = z;
-        
-        const length = 5 + Math.random() * 5;
-        streakPos[idx + 3] = x + this.windDirection.x * length;
-        streakPos[idx + 4] = y;
-        streakPos[idx + 5] = z + this.windDirection.z * length;
+        if (distFromCam > 60 || Math.abs(streakPos[idx + 1] - camY) > 40) {
+          // Respawn "upwind"
+          const dist = 50 + Math.random() * 10;
+          const x = this.camera.position.x - this.windDirection.x * dist + (Math.random() - 0.5) * 60;
+          const z = this.camera.position.z - this.windDirection.z * dist + (Math.random() - 0.5) * 60;
+          const y = camY + (Math.random() - 0.5) * 40;
+          
+          streakPos[idx] = x;
+          streakPos[idx + 1] = y;
+          streakPos[idx + 2] = z;
+          
+          const length = 5 + Math.random() * 5;
+          streakPos[idx + 3] = x + this.windDirection.x * length;
+          streakPos[idx + 4] = y;
+          streakPos[idx + 5] = z + this.windDirection.z * length;
+        }
       }
+      this.windStreaks.geometry.attributes.position.needsUpdate = true;
+      (this.windStreaks.material as THREE.LineBasicMaterial).opacity = this.windIntensity * 0.3 * (0.5 + Math.sin(time * 2) * 0.5);
+      this.windStreaks.visible = true;
+    } else {
+      this.windStreaks.visible = false;
     }
-    this.windStreaks.geometry.attributes.position.needsUpdate = true;
-    (this.windStreaks.material as THREE.LineBasicMaterial).opacity = this.windIntensity * 0.3 * (0.5 + Math.sin(time * 2) * 0.5);
-    this.windStreaks.visible = true;
 
     // Update Leaves
     this.leaves.children.forEach((leaf: any) => {
-      leaf.visible = true;
-      leaf.position.x += windSpeed * leaf.speed * this.windDirection.x;
-      leaf.position.z += windSpeed * leaf.speed * this.windDirection.z;
-      leaf.position.y += Math.sin(time + leaf.offset) * 0.05; // Fluttering
+      // Drift leaves in wind direction
+      leaf.position.x += effectiveWind * leaf.speed * this.windDirection.x * 0.5;
+      leaf.position.z += effectiveWind * leaf.speed * this.windDirection.z * 0.5;
+      
+      // Pull leaves down gently (gravity-like drift)
+      leaf.position.y -= (0.05 + leaf.speed * 0.05);
+      // Add a slight fluttering wave
+      leaf.position.y += Math.sin(time * 2 + leaf.offset) * 0.015;
       
       leaf.rotation.x += leaf.rotSpeed;
-      leaf.rotation.y += leaf.rotSpeed;
+      leaf.rotation.y += leaf.rotSpeed * 1.5;
       
       const distFromCam = Math.sqrt(Math.pow(leaf.position.x - this.camera.position.x, 2) + Math.pow(leaf.position.z - this.camera.position.z, 2));
-      if (distFromCam > 60 || Math.abs(leaf.position.y - camY) > 40) {
-         // Respawn upwind
-         const dist = 50 + Math.random() * 10;
+      const distBelowCam = camY - leaf.position.y;
+      const distAboveCam = leaf.position.y - camY;
+
+      // Reset leaves if they drift too low, too high, or too far away
+      if (distFromCam > 60 || distBelowCam > 20 || distAboveCam > 40) {
+         // Respawn upwind at a higher altitude to let them drift down nicely
+         const dist = 30 + Math.random() * 20;
          leaf.position.x = this.camera.position.x - this.windDirection.x * dist + (Math.random() - 0.5) * 60;
          leaf.position.z = this.camera.position.z - this.windDirection.z * dist + (Math.random() - 0.5) * 60;
-         leaf.position.y = camY + (Math.random() - 0.5) * 40;
+         leaf.position.y = camY + 15 + Math.random() * 15;
       }
     });
 
+    const leafOpacityFactor = Math.max(0, 1 - this.weatherTransition);
     (this.leaves as any).children.forEach((l: any) => {
-      l.material.opacity = this.windIntensity;
+      // Leaves fade out as rain sets in (opacity baseline 0.65 scaled by transition)
+      l.material.opacity = (0.65 + this.windIntensity * 0.35) * leafOpacityFactor;
       l.material.transparent = true;
+      l.visible = l.material.opacity > 0.01;
     });
   }
 
@@ -1247,24 +1343,32 @@ export class GameManager {
     const targetTransition = isRainyPhase ? 1 : 0;
     if (Math.abs(this.weatherTransition - targetTransition) > 0.001) {
       this.weatherTransition += (targetTransition - this.weatherTransition) * 0.005;
-      
-      if (this.onWeatherUpdate) {
-        // Combine transitions: wind starts UI color change logic earlier if needed
-        // but traditionally we only darken for rain.
-        this.onWeatherUpdate(this.weatherTransition);
-      }
-      
-      const skyBase = this.initialSkyColor.clone().lerp(this.cloudySkyColor, this.weatherTransition);
-      this.scene.background = skyBase;
-      
-      if (this.rainSystem) {
-        this.rainSystem.visible = this.weatherTransition > 0.01;
-      }
     }
 
-    if (this.windIntensity > 0.01) {
-      this.updateWind();
+    // Combine transitions for UI color change logic
+    if (this.onWeatherUpdate) {
+      this.onWeatherUpdate(Math.max(this.weatherTransition, this.windIntensity));
     }
+
+    // Calculate base sky background color using transitions
+    const skyBase = this.initialSkyColor.clone();
+    if (this.weatherTransition > 0.01) {
+      skyBase.lerp(this.cloudySkyColor, this.weatherTransition);
+    }
+    if (this.windIntensity > 0.01) {
+      skyBase.lerp(this.windySkyColor, this.windIntensity);
+    }
+
+    // Set background (if not flashing lightning)
+    if (this.lightningIntensity <= 0) {
+      this.scene.background = skyBase;
+    }
+
+    if (this.rainSystem) {
+      this.rainSystem.visible = this.weatherTransition > 0.01;
+    }
+
+    this.updateWind();
 
     // Update window emissions based on weather transition
     const emissiveIntensity = this.weatherTransition * 1.5; 
@@ -1324,8 +1428,6 @@ export class GameManager {
       if (this.lightningIntensity < 0.01) this.lightningIntensity = 0;
       
       // Flash the sky
-      const skyBase = this.initialSkyColor.clone().lerp(this.cloudySkyColor, this.weatherTransition);
-      // Use higher intensity for the lerp to "wash out" the sky
       const flashInfluence = Math.min(this.lightningIntensity, 1.0);
       const flashColor = skyBase.clone().lerp(this.lightningColor, flashInfluence);
       this.scene.background = flashColor;
@@ -1334,9 +1436,26 @@ export class GameManager {
       if (this.ambientLight) this.ambientLight.intensity = 0.7 + this.lightningIntensity * 3.0;
       if (this.directionalLight) this.directionalLight.intensity = 0.8 + this.lightningIntensity * 4.5;
     } else if (this.ambientLight && this.directionalLight) {
-      // Normal intensity
+      // Normal intensity with beautiful theme colors
       this.ambientLight.intensity = 0.7;
       this.directionalLight.intensity = 0.8;
+
+      const ambColor = new THREE.Color(0xffffff);
+      const dirColor = new THREE.Color(0xffffff);
+      
+      if (this.weatherTransition > 0.01) {
+        ambColor.lerp(new THREE.Color('#475569'), this.weatherTransition * 0.5);
+        dirColor.lerp(new THREE.Color('#1e293b'), this.weatherTransition * 0.6);
+      }
+      
+      if (this.windIntensity > 0.01) {
+        // Blends to the custom color palette from the user-provided image
+        ambColor.copy(new THREE.Color('#ffffff')).lerp(new THREE.Color('#2b2d1f'), this.windIntensity * 0.7); // Dark Olive/Army shadow
+        dirColor.copy(new THREE.Color('#ffffff')).lerp(new THREE.Color('#9f7d56'), this.windIntensity * 0.8); // Golden Wheat/Tan sunlight breakout
+      }
+      
+      this.ambientLight.color.copy(ambColor);
+      this.directionalLight.color.copy(dirColor);
     }
 
     if (this.weatherTransition > 0.01) {
@@ -1463,7 +1582,29 @@ export class GameManager {
     }
 
     // Camera follow - smoothly track tower height and horizontal sway to keep the stack centered
-    if (this.stack.length > 0) {
+    if (this.gameState === 'TOWER_REVEAL') {
+      const topBlock = this.stack[this.stack.length - 1];
+      const topPos = topBlock ? topBlock.mesh.position : new THREE.Vector3(0, 0, 0);
+      const foundationTop = -8;
+      const towerHeight = Math.max(1, topPos.y - foundationTop);
+      const middleY = (topPos.y + foundationTop) / 2;
+
+      // Ensure the complete tower is visible by adjusting Orthographic camera zoom
+      const targetZoom = Math.max(0.12, Math.min(1.0, 30.0 / (towerHeight + 12.0)));
+      const targetY = middleY + 20;
+      const targetX = this.baseCameraX;
+      const targetZ = this.baseCameraZ;
+
+      const lerp = 0.02; // slow and smooth panning/zooming backwards
+      this.camera.position.x += (targetX - this.camera.position.x) * lerp;
+      this.camera.position.y += (targetY - this.camera.position.y) * lerp;
+      this.camera.position.z += (targetZ - this.camera.position.z) * lerp;
+
+      this.camera.zoom += (targetZoom - this.camera.zoom) * lerp;
+      this.camera.updateProjectionMatrix();
+
+      this.camera.lookAt(0, middleY - 5, 0);
+    } else if (this.stack.length > 0) {
       const topBlock = this.stack[this.stack.length - 1];
       const topPos = topBlock.mesh.position;
       
@@ -1604,6 +1745,9 @@ export class GameManager {
       if (p.progress >= 1) {
         this.scene.remove(p.group);
         this.flyingPeople.splice(i, 1);
+        if (this.onPersonArrival) {
+          this.onPersonArrival();
+        }
       }
     }
 

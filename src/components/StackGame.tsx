@@ -10,7 +10,7 @@ export const StackGame: React.FC = () => {
   const [score, setScore] = useState(0);
   const [population, setPopulation] = useState(0);
   const [weatherTransition, setWeatherTransition] = useState(0);
-  const [gameState, setGameState] = useState<'START' | 'PLAYING' | 'GAMEOVER'>('START');
+  const [gameState, setGameState] = useState<'START' | 'PLAYING' | 'GAMEOVER' | 'TOWER_REVEAL'>('START');
   const [showPerfect, setShowPerfect] = useState(false);
   const [showSlip, setShowSlip] = useState(false);
   const [perfectStreak, setPerfectStreak] = useState(0);
@@ -25,14 +25,10 @@ export const StackGame: React.FC = () => {
     if (containerRef.current) {
       const manager = new GameManager(
         containerRef.current,
-        (s, popInc) => {
+        (s) => {
           setScore(s);
           if (s === 0) {
             setPopulation(0);
-          } else if (popInc !== undefined) {
-            setPopulation((prev) => prev + popInc);
-          } else {
-            setPopulation(s * 144);
           }
         },
         (s) => {
@@ -70,6 +66,12 @@ export const StackGame: React.FC = () => {
         },
         (remainingMs) => {
           setExecTimeLeft(remainingMs);
+        },
+        () => {
+          setPopulation((prev) => prev + 1);
+        },
+        () => {
+          setGameState('TOWER_REVEAL');
         }
       );
       managerRef.current = manager;
@@ -132,7 +134,7 @@ export const StackGame: React.FC = () => {
           <motion.div 
             initial={{ opacity: 1 }}
             animate={{ 
-              color: weatherTransition > 0.4 ? '#93c5fd' : '#6366f1' // blue-300 vs indigo-500
+              color: weatherTransition > 0.4 ? '#FFF2AE' : '#CC4933' // warm yellow vs rust orange-red (palette anchors)
             }}
             className="text-xl font-black leading-tight transition-colors duration-500"
           >
@@ -189,22 +191,53 @@ export const StackGame: React.FC = () => {
             className="absolute inset-0 flex items-center justify-center bg-white/40 backdrop-blur-md z-20 pointer-events-none px-6"
           >
             <div className="bg-white p-10 rounded-3xl shadow-2xl flex flex-col items-center border border-slate-100 pointer-events-auto w-full max-w-sm">
-              <div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-3xl flex items-center justify-center mb-8 rotate-12">
-                <div className="w-12 h-12 border-4 border-indigo-600 rounded-lg" />
+              <div className="w-20 h-20 bg-[#fffbeb] text-[#CC4933] rounded-3xl flex items-center justify-center mb-8 rotate-12 border border-[#FDCF70]">
+                {/* Visual of autumn leaf using elegant overlapping geometry */}
+                <span className="text-4xl">🍁</span>
               </div>
-              <h1 className="text-4xl font-black text-slate-800 mb-3 tracking-tight">BUILDER</h1>
+              <h1 className="text-4xl font-black text-[#750704] mb-3 tracking-tight">HARVEST TOWER</h1>
               <p className="text-slate-500 text-center mb-10 font-medium text-sm leading-relaxed">
-                A masterpiece of architecture. <br/>
-                Tap to drop and stack the tower!
+                Cozy, colorful autumn architecture. <br/>
+                Tap to drop and stack your tower!
               </p>
               <button 
                 onClick={(e) => { e.stopPropagation(); handleInteraction(); }}
-                className="w-full py-5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-indigo-200"
+                className="w-full py-5 bg-[#CC4933] hover:bg-[#750704] text-white rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-xl shadow-[#CC4933]/20"
               >
                 <Play fill="currentColor" size={20} />
                 START
               </button>
             </div>
+          </motion.div>
+        )}
+
+        {gameState === 'TOWER_REVEAL' && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 flex flex-col items-center justify-end pb-16 bg-black/10 pointer-events-none z-20"
+          >
+            <motion.div 
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              transition={{ delay: 0.8, duration: 0.5 }}
+              className="pointer-events-auto flex flex-col items-center gap-2"
+            >
+              <motion.div 
+                animate={{ scale: [1, 1.05, 1], opacity: [0.9, 1, 0.9] }}
+                transition={{ repeat: Infinity, duration: 1.8, ease: "easeInOut" }}
+                className="bg-slate-900/95 text-white border border-white/25 backdrop-blur-md px-8 py-4 rounded-full shadow-2xl flex items-center gap-2 cursor-pointer active:scale-95 transition-transform"
+                onClick={(e) => { e.stopPropagation(); handleInteraction(); }}
+              >
+                <span className="text-xs font-black tracking-[0.3em] uppercase pl-1">
+                  TAP TO CONTINUE
+                </span>
+              </motion.div>
+              <span className="text-[10px] text-slate-100/90 font-bold tracking-widest uppercase drop-shadow-md">
+                Viewing Complete Tower ({score} Floors)
+              </span>
+            </motion.div>
           </motion.div>
         )}
 
@@ -216,17 +249,17 @@ export const StackGame: React.FC = () => {
             className="absolute inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-lg z-20 pointer-events-none px-6"
           >
             <div className="bg-white p-10 rounded-3xl shadow-2xl flex flex-col items-center border border-slate-100 pointer-events-auto w-full max-w-sm">
-              <div className="w-20 h-20 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mb-8">
-                <RefreshCw size={40} className="animate-spin-slow" />
+              <div className="w-20 h-20 bg-[#fffbeb] text-[#CC4933] rounded-3xl flex items-center justify-center mb-8">
+                <RefreshCw size={40} className="animate-spin-slow text-[#CC4933]" />
               </div>
-              <h1 className="text-3xl font-black text-slate-800 mb-2 uppercase tracking-tight text-center">Tower Collapsed</h1>
-              <div className="flex flex-col items-center mb-10 bg-slate-50 w-full py-6 rounded-2xl">
+              <h1 className="text-3xl font-black text-[#750704] mb-2 uppercase tracking-tight text-center">Tower Collapsed</h1>
+              <div className="flex flex-col items-center mb-10 bg-[#fff9e6] w-full py-6 rounded-2xl border border-[#FDCF70]/30">
                 <span className="text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] mb-1">Total Floors</span>
-                <span className="text-6xl font-black text-indigo-600">{score}</span>
+                <span className="text-6xl font-black text-[#CC4933]">{score}</span>
               </div>
               <button 
                 onClick={(e) => { e.stopPropagation(); handleInteraction(); }}
-                className="w-full py-5 bg-slate-800 hover:bg-slate-900 text-white rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-2xl"
+                className="w-full py-5 bg-[#CC4933] hover:bg-[#750704] text-white rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-2xl"
               >
                 REBUILD
               </button>
@@ -288,7 +321,7 @@ export const StackGame: React.FC = () => {
               className={`h-full rounded-full transition-all duration-75 ${
                 isExecActive 
                   ? 'bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-500 shadow-[0_0_10px_rgba(251,191,36,0.9)]' 
-                  : 'bg-indigo-500 shadow-[0_0_5px_rgba(99,102,241,0.5)]'
+                  : 'bg-[#F8A257] shadow-[0_0_5px_rgba(248,162,87,0.5)]'
               }`}
               initial={{ width: '0%' }}
               animate={{ 
